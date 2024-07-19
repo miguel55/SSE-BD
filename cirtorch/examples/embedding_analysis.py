@@ -368,7 +368,25 @@ for id_emb, N_emb in enumerate(embs):
         
     if (cfg.REMAP):
         # WE ALSO PROVIDE THE PROBABILITIES FOR CLUSTER ASSIGMENT IN probs_embed.mat
-        cidx_embed=sio.loadmat(os.path.join(cfg.result_dir, folder,'behaviors_emb.mat'))['behavior'].T-1
+        cidx_embed=sio.loadmat(os.path.join(cfg.result_dir, folder,'behaviors_emb.mat'))['behavior'].ravel()-1
+        # WE DEMONSTRATE THAT WE OBTAIN THE BEHAVIORS FROM THE PAPER WITH A GMM 
+        # Extract the train samples
+        cidx_embed_train=cidx_embed[np.in1d(group,np.array(cfg.train_groups))]
+        mus=np.zeros((cfg.K_selected,all_data_norm.shape[1]),dtype='float')
+        precs=np.zeros((cfg.K_selected,all_data_norm.shape[1],all_data_norm.shape[1]),dtype='float')
+        pis=np.zeros((cfg.K_selected,),dtype='float')
+        for k in range(cfg.K_selected):
+            mus[k,:]=np.mean(train_data_norm[cidx_embed_train==k,:],axis=0)
+            precs[k,...]=np.linalg.inv(np.cov(train_data_norm[cidx_embed_train==k,:].T))
+            pis[k]=np.sum(cidx_embed_train==k)/cidx_embed_train.size
+            
+        cluster_agg=GaussianMixture(n_components=cfg.K_selected,n_init=10,random_state=cfg.SEED,means_init=mus, precisions_init=precs, weights_init=pis)
+        cluster_agg.fit(train_data_norm)
+        cidx_embed_train=cluster_agg.predict(train_data_norm)
+        cidx_embed_test=cluster_agg.predict(test_data_norm)
+        new_cidx_embed=cluster_agg.predict(all_data_norm)
+        print('Coincidence between the new behaviors and behaviors from the paper')
+        print(np.sum(new_cidx_embed==cidx_embed)/np.size(cidx_embed))
     else:
         cluster_agg=GaussianMixture(n_components=cfg.K_selected,n_init=10,random_state=cfg.SEED)
         cluster_agg.fit(train_data_norm)
@@ -607,6 +625,9 @@ for id_emb, N_emb in enumerate(embs):
     
     id_sort=np.argsort(neutrophils_by_trajectory,axis=0).ravel()
     neutrophils_by_trajectory=neutrophils_by_trajectory[id_sort]
+    if (cfg.REMAP):
+        X_embedded=X_embedded[:,[1,0]]
+        X_embedded[:,0]=-X_embedded[:,0]
     X_embedded=X_embedded[id_sort,:]
     y_t=cidx_embed[id_sort].copy()+1
     id_neut=np.unique(neutrophils_by_trajectory)
