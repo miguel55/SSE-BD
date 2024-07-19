@@ -21,6 +21,8 @@ import pandas as pd
 from sklearn.metrics import davies_bouldin_score
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
+from sklearn.metrics.pairwise import euclidean_distances
+
 sns.set(rc={'figure.figsize':(11.7,8.27)})
 
 # 1. GMM en el espacio original para la detección del número de comportamientos
@@ -78,7 +80,7 @@ cluster_agg.fit(train_data_norm)
 cidx_orig_train=cluster_agg.predict(train_data_norm)
 cidx_orig_test=cluster_agg.predict(test_data_norm)
 cidx_orig=cluster_agg.predict(all_data_norm)
-    
+probs_orig=cluster_agg.predict_proba(all_data_norm)
     
 if (not os.path.exists(os.path.join(cfg.result_dir, 'analysis', 'original_data', 'DB_score_behavior_' + cfg.alg + '.npy'))):
     # Analyze the Davies-Bouldin score for all the parameter combinations
@@ -243,76 +245,120 @@ plt.legend(loc=(-0.1,0.9))
 plt.savefig(os.path.join(cfg.result_dir, 'analysis', 'original_data', 'behavior_comparison.png'), dpi=300)
 plt.show()
 
-# Behavior transitions
+# Analize the behavior transitions and normalized displacements w.r.t. the closest cluster
 neutrophils_by_trajectory = sio.loadmat(os.path.join(cfg.data_dir, 'neutrophils_by_trajectory.mat'))['neutrophils_by_trajectory']
-
-palette_grey=sns.color_palette("Greys",2)
-DB_score = np.load(os.path.join(cfg.result_dir, 'analysis', 'original_data', 'DB_score_behavior_' + cfg.alg + '.npy'))
-ind = np.unravel_index(np.argmin(DB_score, axis=None), DB_score.shape)
-palette_grey_aux=sns.color_palette("Greys",2)
-
-fig, ax = plt.subplots()
-
-if (cfg.alg == 'tsne'):
-    # t-SNE
-    X_embedded = TSNE(n_components=2, perplexity=cfg.param1[ind[0]],
-                      early_exaggeration=cfg.param2[ind[1]], learning_rate=200.0, n_iter=1000,
-                      n_iter_without_progress=300, metric='euclidean', random_state=cfg.SEED).fit_transform(all_data)
-elif (cfg.alg == 'umap'):
-    # UMAP
-    X_embedded = umap.UMAP(n_neighbors=int(cfg.param1[ind[0]]), min_dist=int(cfg.param2[ind[1]]),
-                           metric='euclidean', random_state=cfg.SEED).fit_transform(all_data)
-
-sns_plot = sns.scatterplot(x=X_embedded[:, 0], y=X_embedded[:, 1], hue=cidx_orig.ravel(), s=cfg.POINT_SIZE,
-                           legend='full', alpha=cfg.ALPHA, palette=palette)
-new_labels = []
-for i in range(0, int(cidx_orig.max() + 1)):
-    # replace labels
-    new_labels.append('behavior ' + str(int(i+1)))
-for t, l in zip(sns_plot.get_legend().texts, new_labels):  t.set_text(l)
-
-id_sort=np.argsort(neutrophils_by_trajectory,axis=0).ravel()
-neutrophils_by_trajectory=neutrophils_by_trajectory[id_sort]
-X_embedded=X_embedded[id_sort,:]
-y_t=cidx_orig[id_sort].copy()+1
+neutrophils_by_timestamp = sio.loadmat(os.path.join(cfg.data_dir, 'neutrophils_by_timestamp.mat'))['neutrophils_by_timestamp']
 id_neut=np.unique(neutrophils_by_trajectory)
-transferencias=np.zeros((int(y_t.max()),int(y_t.max())),dtype='float')
-# totales=np.zeros((int(y.max()),),dtype='float')
-nelements=[]
-indexes1=np.zeros((0,),dtype='int')
-indexes2=np.zeros((0,),dtype='int')
-for i in range(len(id_neut)):
-    X_aux=X_embedded[np.where(neutrophils_by_trajectory==id_neut[i])[0]]
-    y_aux=y_t[np.where(neutrophils_by_trajectory==id_neut[i])[0]]
-    yies=np.unique(y_aux)
-    indexes = np.unique(y_aux, return_index=True)[1]
-    yies=np.array([y_aux[index] for index in sorted(indexes)])
-    if (len(yies)==1):
-        transferencias[int(yies[0]-1),int(yies[0]-1)]=transferencias[int(yies[0]-1),int(yies[0]-1)]+1
-        indexes1=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes1),axis=0)
-    for j in range(len(yies)-1):
-        nelements.append(np.min((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1]))))
-        if (np.min((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))>cfg.PTH):
-            transferencias[int(yies[j]-1),int(yies[j+1]-1)]=transferencias[int(yies[j]-1),int(yies[j+1]-1)]+1
-            X_aux1=np.median(X_aux[np.where(y_aux==yies[j])[0],:],axis=0)
-            X_aux2=np.median(X_aux[np.where(y_aux==yies[j+1])[0],:],axis=0)
-            X_aux12=np.concatenate((X_aux1[np.newaxis,:],X_aux2[np.newaxis,:]),axis=0)
-            sns_plot = sns.lineplot(x=X_aux12[:,0], y=X_aux12[:,1], linewidth=1.5, color=palette[int(yies[j]-1)], legend=False, ax=ax)
-            indexes2=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes2),axis=0)
+id_sort=np.argsort(neutrophils_by_trajectory,axis=0).ravel()
+neutrophils_by_trajectoryS=neutrophils_by_trajectory[id_sort]
+neutrophils_by_timestampS=neutrophils_by_timestamp[id_sort]
+X_embeddedS=X_embedded[id_sort,:]
+X_fullS=all_data_norm[id_sort,:]
+cidx_origS=cidx_orig[id_sort].copy()
+probs_origS=probs_orig[id_sort,:].copy()
+groupS=group[id_sort].copy()
+pos_emb=[]
+disp_emb_orig=[]
+disp_timestamps_orig=[]
+behaviors_per_traj=[]
+behaviors_per_traj_orig1=[]
+behaviors_per_traj_orig2=[]
+id_cell1_orig=[]
+id_cell2_orig=[]
+id_traj_orig=[]
+id_group_orig=[]
+behavior_prob_orig=[]
+valids_orig=0
+duration_orig=[]
+
+for i in range(id_neut.shape[0]):
+    id_traj=np.where(neutrophils_by_trajectoryS==id_neut[i])[0]
+    timestamps_traj=neutrophils_by_timestampS[np.where(neutrophils_by_trajectoryS==id_neut[i])[0]]
+    id_sort=np.argsort(timestamps_traj,axis=0).ravel()
+    timestamps_traj=timestamps_traj[id_sort]
+    X_embedded_traj=X_embeddedS[id_traj,:].copy()[id_sort,:]
+    id_group_orig.append(groupS[id_traj][:-1])
+    X_full_traj=X_fullS[id_traj,:].copy()[id_sort,:]
+    pos_emb.append(X_full_traj)
+    behaviors_per_traj.append(cidx_origS[id_traj].copy()[id_sort]+1)
+    aux=cidx_origS[id_traj].copy()[id_sort]+1
+    dur=1
+    for j in range(len(aux)-1):
+        if (not aux[j]==aux[j+1]):
+            id_aux=np.where(np.logical_and(timestamps_traj>timestamps_traj[j],timestamps_traj<=timestamps_traj[j]+cfg.PTH))[0]
+            if (aux[id_aux].size>0):
+                if (np.unique(aux[id_aux]).size==1):
+                    valids_orig=valids_orig+1
+            else:
+                valids_orig=valids_orig+1
+            duration_orig.append(dur)
+            dur=1
         else:
-            transferencias[int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1),int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1)]=\
-                transferencias[int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1),int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1)]+1
-            indexes1=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes1),axis=0)
+            dur=dur+1
+    behavior_prob_orig.append(probs_origS[id_traj,:].copy()[id_sort,:])
+    disp_emb_orig.append(np.sqrt(np.sum(np.diff(pos_emb[-1],axis=0)**2,axis=1)))
+    behaviors_per_traj_orig1.append(cidx_origS[id_traj].copy()[id_sort][:-1]+1)
+    behaviors_per_traj_orig2.append(cidx_origS[id_traj].copy()[id_sort][1:]+1)
+    disp_timestamps_orig.append(np.diff(timestamps_traj,axis=0))
+    id_cell1_orig.append(timestamps_traj[:-1])
+    id_cell2_orig.append(timestamps_traj[1:])
+    id_traj_orig.append(id_neut[i]*np.ones_like(timestamps_traj)[:-1])
 
-for i in range(transferencias.shape[0]):
-    transferencias[i,:]=transferencias[i,:]/np.sum(transferencias[i,:])
+# Get displacements for each cell
+disp_emb_orig=np.concatenate(disp_emb_orig,axis=0)
+behaviors_per_traj_orig1=np.concatenate(behaviors_per_traj_orig1,axis=0)
+behaviors_per_traj_orig2=np.concatenate(behaviors_per_traj_orig2,axis=0)
+disp_timestamps_orig=np.concatenate(disp_timestamps_orig,axis=0)
+id_traj_orig=np.concatenate(id_traj_orig,axis=0)
+id_cell1_orig=np.concatenate(id_cell1_orig,axis=0)
+id_cell2_orig=np.concatenate(id_cell2_orig,axis=0)
+behaviors_per_traj=np.concatenate(behaviors_per_traj,axis=0)
+behavior_prob_orig=np.concatenate(behavior_prob_orig,axis=0)
+id_group_orig=np.concatenate(id_group_orig,axis=0)
+duration_orig=np.array(duration_orig)
 
-sns_plot.figure.savefig(os.path.join(cfg.result_dir, 'analysis', 'original_data', cfg.alg + '_behaviors_transferencias2.png'))
-plt.clf()
+behavior_t1_orig=[]
+transition_t1_orig=[]
+transition_t2_orig=[]
+behavior_t2_orig=[]
+for i in range(behaviors_per_traj.shape[0]-1):
+    if (neutrophils_by_trajectoryS[i]==neutrophils_by_trajectoryS[i+1]):
+        if (not behaviors_per_traj[i]==behaviors_per_traj[i+1]):
+            behavior_t1_orig.append(behavior_prob_orig[i,behaviors_per_traj[i]-1])
+            behavior_t2_orig.append(behavior_prob_orig[i+1,behaviors_per_traj[i]-1])
+            transition_t1_orig.append(behavior_prob_orig[i,behaviors_per_traj[i+1]-1])
+            transition_t2_orig.append(behavior_prob_orig[i+1,behaviors_per_traj[i+1]-1])
 
-transf_matrix = pd.DataFrame(transferencias,columns=['behavior '+str(i) for i in range(1,cidx_orig.max()+2)],index=['behavior '+str(i) for i in range(1,cidx_orig.max()+2)]).round(3)
-sns.heatmap(transf_matrix, annot=True, vmax=1, vmin=0, cmap='Blues')
-sns_plot.figure.savefig(os.path.join(cfg.result_dir, 'analysis', 'original_data', cfg.alg + '_transf_matrix.png'))
+med_disp_emb_orig=disp_emb_orig/(disp_timestamps_orig.ravel())
+
+n_cells_not_changing_behavior_orig=np.sum(behaviors_per_traj_orig1==behaviors_per_traj_orig2)
+n_cells_changing_behavior_orig=np.sum(behaviors_per_traj_orig1!=behaviors_per_traj_orig2)
+n_cells_not_changing_behavior_orig_group=np.zeros((n_groups,),dtype='int')
+n_cells_changing_behavior_orig_group=np.zeros((n_groups,),dtype='int')
+for i in range(n_groups):
+    n_cells_not_changing_behavior_orig_group[i]=np.sum(behaviors_per_traj_orig1[np.where(id_group_orig==int(i+1))[0]]==behaviors_per_traj_orig2[np.where(id_group_orig==int(i+1))[0]])
+    n_cells_changing_behavior_orig_group[i]=np.sum(behaviors_per_traj_orig1[np.where(id_group_orig==int(i+1))[0]]!=behaviors_per_traj_orig2[np.where(id_group_orig==int(i+1))[0]])    
+
+
+centroids=np.zeros((cfg.K_selected,all_data_norm.shape[1]),dtype='float')
+for i in range(cfg.K_selected):
+    centroids[i,:]=np.mean(all_data_norm[np.where(cidx_orig==i)[0],:],axis=0)
+cluster_distance_emb = euclidean_distances(centroids)
+cluster_distance_emb = cluster_distance_emb+1e6*np.eye(cluster_distance_emb.shape[0])
+cluster_distance_emb = np.min(cluster_distance_emb,axis=1)
+
+for i in range(med_disp_emb_orig.shape[0]):
+    med_disp_emb_orig[i]=med_disp_emb_orig[i]/cluster_distance_emb[behaviors_per_traj_orig1[i]-1]
+
+H=np.histogram(med_disp_emb_orig[behaviors_per_traj_orig1==behaviors_per_traj_orig2], bins=10,range=(0,np.max(med_disp_emb_orig)))
+plt.bar((H[1][:-1]+H[1][1:])/2, H[0], width=0.9*(H[1][1]-H[1][0]), edgecolor="gray")
+H=np.histogram(med_disp_emb_orig[behaviors_per_traj_orig1!=behaviors_per_traj_orig2], bins=10,range=(0,np.max(med_disp_emb_orig)))
+plt.bar((H[1][:-1]+H[1][1:])/2, H[0], width=0.45*(H[1][1]-H[1][0]), edgecolor="red")
+plt.ylabel('Number of cells', fontsize=12)
+plt.xlabel('Relative displacement respect to the closest cluster', fontsize=12)
+plt.legend(['not changing behavior ('+str(n_cells_not_changing_behavior_orig)+')','changing behavior ('+str(n_cells_changing_behavior_orig)+')'])
+# plt.yscale("log")
+plt.savefig(os.path.join(cfg.result_dir, 'analysis', 'original_data', 'behavior_transitions_and_displacements.png'), dpi=300)
 plt.clf()
 
 
@@ -367,9 +413,12 @@ for id_emb, N_emb in enumerate(embs):
         sns.set(rc={'figure.figsize':(11.7,8.27)})
         
     if (cfg.REMAP):
-        # WE ALSO PROVIDE THE PROBABILITIES FOR CLUSTER ASSIGMENT IN probs_embed.mat
+        # We load the clustering and probabilities for our model
         cidx_embed=sio.loadmat(os.path.join(cfg.result_dir, folder,'behaviors_emb.mat'))['behavior'].ravel()-1
-        # WE DEMONSTRATE THAT WE OBTAIN THE BEHAVIORS FROM THE PAPER WITH A GMM 
+        probs_embed=sio.loadmat(os.path.join(cfg.result_dir, folder,'probs_embed.mat'))['probs_embed']
+
+        # We built a GMM with the assignations from the paper, just in case the implementation in newer versions
+        # of Python does not provide the same clustering
         # Extract the train samples
         cidx_embed_train=cidx_embed[np.in1d(group,np.array(cfg.train_groups))]
         mus=np.zeros((cfg.K_selected,all_data_norm.shape[1]),dtype='float')
@@ -385,8 +434,11 @@ for id_emb, N_emb in enumerate(embs):
         cidx_embed_train=cluster_agg.predict(train_data_norm)
         cidx_embed_test=cluster_agg.predict(test_data_norm)
         new_cidx_embed=cluster_agg.predict(all_data_norm)
+        new_probs_embed=cluster_agg.predict_proba(all_data_norm)
         print('Coincidence between the new behaviors and behaviors from the paper')
         print(np.sum(new_cidx_embed==cidx_embed)/np.size(cidx_embed))
+        print('Mean absolute error in the probabilities')
+        print(np.mean(new_probs_embed==probs_embed)/np.size(probs_embed))
     else:
         cluster_agg=GaussianMixture(n_components=cfg.K_selected,n_init=10,random_state=cfg.SEED)
         cluster_agg.fit(train_data_norm)
@@ -595,78 +647,120 @@ for id_emb, N_emb in enumerate(embs):
     plt.savefig(os.path.join(cfg.result_dir, folder, 'behavior_comparison_emb.png'), dpi=300)
     plt.show()
     
-    ## Behavior transitions
-
-    DB_score = np.load(os.path.join(cfg.result_dir, folder, 'DB_score_behavior_' + cfg.alg + '_emb.npy'))
-    ind = np.unravel_index(np.argmin(DB_score, axis=None), DB_score.shape)
-    palette_grey_aux=sns.color_palette("Greys",2)
-    
-    fig, ax = plt.subplots()
-    if (cfg.alg == 'tsne'):
-        # t-SNE
-        X_embedded = TSNE(n_components=2, perplexity=cfg.param1[ind[0]],
-                          early_exaggeration=cfg.param2[ind[1]], learning_rate=200.0, n_iter=1000,
-                          n_iter_without_progress=300, metric='euclidean', random_state=cfg.SEED).fit_transform(data)
-    elif (cfg.alg == 'umap'):
-        # UMAP
-        X_embedded = umap.UMAP(n_neighbors=int(cfg.param1[ind[0]]), min_dist=int(cfg.param2[ind[1]]),
-                               metric='euclidean', random_state=cfg.SEED).fit_transform(data)
-    if (cfg.REMAP):
-        sns_plot = sns.scatterplot(y=X_embedded[:, 0], x=-X_embedded[:, 1], hue=cidx_embed.ravel(), s=cfg.POINT_SIZE,
-                                   legend='full', alpha=cfg.ALPHA, palette=palette)
-    else:
-        sns_plot = sns.scatterplot(x=X_embedded[:, 0], y=X_embedded[:, 1], hue=cidx_embed.ravel(), s=cfg.POINT_SIZE,
-                                   legend='full', alpha=cfg.ALPHA, palette=palette)
-    new_labels = []
-    for i in range(0, int(cidx_orig.max() + 1)):
-        # replace labels
-        new_labels.append('behavior ' + str(int(i+1)))
-    for t, l in zip(sns_plot.get_legend().texts, new_labels):  t.set_text(l)
-    
-    id_sort=np.argsort(neutrophils_by_trajectory,axis=0).ravel()
-    neutrophils_by_trajectory=neutrophils_by_trajectory[id_sort]
-    if (cfg.REMAP):
-        X_embedded=X_embedded[:,[1,0]]
-        X_embedded[:,0]=-X_embedded[:,0]
-    X_embedded=X_embedded[id_sort,:]
-    y_t=cidx_embed[id_sort].copy()+1
+    ## Analyze the number of behavior transitions and normalized displacements w.r.t. the closest cluster
+    neutrophils_by_trajectory = sio.loadmat(os.path.join(cfg.data_dir,'neutrophils_by_trajectory.mat'))['neutrophils_by_trajectory']
+    neutrophils_by_timestamp = sio.loadmat(os.path.join(cfg.data_dir,'neutrophils_by_timestamp.mat'))['neutrophils_by_timestamp']
     id_neut=np.unique(neutrophils_by_trajectory)
-    transferencias=np.zeros((int(y_t.max()),int(y_t.max())),dtype='float')
-    nelements=[]
-    indexes1=np.zeros((0,),dtype='int')
-    indexes2=np.zeros((0,),dtype='int')
-    for i in range(len(id_neut)):
-        X_aux=X_embedded[np.where(neutrophils_by_trajectory==id_neut[i])[0]]
-        y_aux=y_t[np.where(neutrophils_by_trajectory==id_neut[i])[0]]
-        yies=np.unique(y_aux)
-        indexes = np.unique(y_aux, return_index=True)[1]
-        yies=np.array([y_aux[index] for index in sorted(indexes)])
-        if (len(yies)==1):
-            transferencias[int(yies[0]-1),int(yies[0]-1)]=transferencias[int(yies[0]-1),int(yies[0]-1)]+1
-            indexes1=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes1),axis=0)
-        for j in range(len(yies)-1):
-            nelements.append(np.min((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1]))))
-            if (np.min((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))>cfg.PTH):
-                transferencias[int(yies[j]-1),int(yies[j+1]-1)]=transferencias[int(yies[j]-1),int(yies[j+1]-1)]+1
-                X_aux1=np.median(X_aux[np.where(y_aux==yies[j])[0],:],axis=0)
-                X_aux2=np.median(X_aux[np.where(y_aux==yies[j+1])[0],:],axis=0)
-                X_aux12=np.concatenate((X_aux1[np.newaxis,:],X_aux2[np.newaxis,:]),axis=0)
-                sns_plot = sns.lineplot(x=X_aux12[:,0], y=X_aux12[:,1], linewidth=1.5, color=palette[int(yies[j]-1)], legend=False, ax=ax)
-                indexes2=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes2),axis=0)
+    id_sort=np.argsort(neutrophils_by_trajectory,axis=0).ravel()
+    neutrophils_by_trajectoryS=neutrophils_by_trajectory[id_sort]
+    neutrophils_by_timestampS=neutrophils_by_timestamp[id_sort]
+    X_embeddedS=X_embedded[id_sort,:]
+    X_fullS=all_data_norm[id_sort,:]
+    cidx_embedS=cidx_embed[id_sort].copy()
+    probs_embedS=probs_embed[id_sort,:].copy()
+    groupS=group[id_sort].copy()
+    pos_emb=[]
+    disp_emb=[]
+    disp_timestamps=[]
+    behaviors_per_traj=[]
+    behaviors_per_traj1=[]
+    behaviors_per_traj2=[]
+    id_traj_emb=[]
+    id_cell1=[]
+    id_cell2=[]
+    behavior_prob=[]
+    id_group=[]
+    valids=0
+    valid_ids=[]
+    duration=[]
+    for i in range(id_neut.shape[0]):
+        id_traj=np.where(neutrophils_by_trajectoryS==id_neut[i])[0]
+        timestamps_traj=neutrophils_by_timestampS[np.where(neutrophils_by_trajectoryS==id_neut[i])[0]]
+        id_sort=np.argsort(timestamps_traj,axis=0).ravel()
+        timestamps_traj=timestamps_traj[id_sort]
+        X_embedded_traj=X_embeddedS[id_traj,:].copy()[id_sort,:]
+        X_full_traj=X_fullS[id_traj,:].copy()[id_sort,:]
+        id_group.append(groupS[id_traj][:-1])
+        pos_emb.append(X_full_traj)
+        behaviors_per_traj.append(cidx_embedS[id_traj].copy()[id_sort]+1)
+        aux=cidx_embedS[id_traj].copy()[id_sort]+1
+        correct=np.ones_like(aux)
+        dur=1
+        for j in range(len(aux)-1):
+            if (not aux[j]==aux[j+1]):
+                id_aux=np.where(np.logical_and(timestamps_traj>timestamps_traj[j],timestamps_traj<=timestamps_traj[j]+cfg.PTH))[0]
+                if (aux[id_aux].size>0):
+                    if (np.unique(aux[id_aux]).size==1):
+                        valids=valids+1
+                    else:
+                        correct[j]=0
+                else:
+                    valids=valids+1
+                duration.append(dur)
+                dur=1
             else:
-                transferencias[int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1),int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1)]=\
-                    transferencias[int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1),int(yies[np.argmax((np.sum(y_aux==yies[j]),np.sum(y_aux==yies[j+1])))]-1)]+1
-                indexes1=np.concatenate((np.where(neutrophils_by_trajectory==id_neut[i])[0],indexes1),axis=0)
+                dur=dur+1
+                    
+        behavior_prob.append(probs_embedS[id_traj,:].copy()[id_sort,:])
+        disp_emb.append(np.sqrt(np.sum(np.diff(pos_emb[-1],axis=0)**2,axis=1)))
+        behaviors_per_traj1.append(cidx_embedS[id_traj].copy()[id_sort][:-1]+1)
+        behaviors_per_traj2.append(cidx_embedS[id_traj].copy()[id_sort][1:]+1)
+        disp_timestamps.append(np.diff(timestamps_traj,axis=0))
+        id_cell1.append(timestamps_traj[:-1])
+        id_cell2.append(timestamps_traj[1:])
+        id_traj_emb.append(id_neut[i]*np.ones_like(timestamps_traj)[:-1])
+        valid_ids.append(correct)
     
-    for i in range(transferencias.shape[0]):
-        transferencias[i,:]=transferencias[i,:]/np.sum(transferencias[i,:])
+    # Get displacements for each cell
+    disp_emb=np.concatenate(disp_emb,axis=0)
+    behaviors_per_traj1=np.concatenate(behaviors_per_traj1,axis=0)
+    behaviors_per_traj2=np.concatenate(behaviors_per_traj2,axis=0)
+    disp_timestamps=np.concatenate(disp_timestamps,axis=0)
+    id_cell1=np.concatenate(id_cell1,axis=0)
+    id_cell2=np.concatenate(id_cell2,axis=0)
+    id_traj_emb=np.concatenate(id_traj_emb,axis=0)
+    behaviors_per_traj=np.concatenate(behaviors_per_traj,axis=0)
+    behavior_prob=np.concatenate(behavior_prob,axis=0)
+    id_group=np.concatenate(id_group,axis=0)
+    valid_ids=np.concatenate(valid_ids,axis=0)
+    duration=np.array(duration)
+    behavior_t1=[]
+    transition_t1=[]
+    transition_t2=[]
+    behavior_t2=[]
+    for i in range(behaviors_per_traj.shape[0]-1):
+        if (neutrophils_by_trajectoryS[i]==neutrophils_by_trajectoryS[i+1]):
+            if (not behaviors_per_traj[i]==behaviors_per_traj[i+1]):
+                behavior_t1.append(behavior_prob[i,behaviors_per_traj[i]-1])
+                behavior_t2.append(behavior_prob[i+1,behaviors_per_traj[i]-1])
+                transition_t1.append(behavior_prob[i,behaviors_per_traj[i+1]-1])
+                transition_t2.append(behavior_prob[i+1,behaviors_per_traj[i+1]-1])
+                
+    med_disp_emb=disp_emb/(disp_timestamps.ravel())
     
-    sns_plot.figure.savefig(os.path.join(cfg.result_dir, folder, cfg.alg + '_behavior_transitions.png'))
-    plt.clf()
-    
-    transf_matrix = pd.DataFrame(transferencias,columns=['behavior '+str(i) for i in range(1,cidx_embed.max()+2)],index=['behavior '+str(i) for i in range(1,cidx_embed.max()+2)]).round(3)
-    sns.heatmap(transf_matrix, annot=True, vmax=1, vmin=0, cmap='Blues')
-    sns_plot.figure.savefig(os.path.join(cfg.result_dir, folder, 'behavior_transition_matrix.png'))
+    n_cells_not_changing_behavior=np.sum(behaviors_per_traj1==behaviors_per_traj2)
+    n_cells_changing_behavior=np.sum(behaviors_per_traj1!=behaviors_per_traj2)
+    n_cells_not_changing_behavior_group=np.zeros((n_groups,),dtype='int')
+    n_cells_changing_behavior_group=np.zeros((n_groups,),dtype='int')
+    for i in range(n_groups):
+        n_cells_not_changing_behavior_group[i]=np.sum(behaviors_per_traj1[np.where(id_group==int(i+1))[0]]==behaviors_per_traj2[np.where(id_group==int(i+1))[0]])
+        n_cells_changing_behavior_group[i]=np.sum(behaviors_per_traj1[np.where(id_group==int(i+1))[0]]!=behaviors_per_traj2[np.where(id_group==int(i+1))[0]])    
+
+    cluster_distance_emb = euclidean_distances(cluster_agg.means_)
+    cluster_distance_emb = cluster_distance_emb+1e6*np.eye(cluster_distance_emb.shape[0])
+    cluster_distance_emb = np.min(cluster_distance_emb,axis=1)
+        
+    for i in range(med_disp_emb.shape[0]):
+        med_disp_emb[i]=med_disp_emb[i]/cluster_distance_emb[behaviors_per_traj1[i]-1]
+        
+    H=np.histogram(med_disp_emb[behaviors_per_traj1==behaviors_per_traj2], bins=10,range=(0,np.max(med_disp_emb)))
+    plt.bar((H[1][:-1]+H[1][1:])/2, H[0], width=0.9*(H[1][1]-H[1][0]), edgecolor="gray")
+    H=np.histogram(med_disp_emb[behaviors_per_traj1!=behaviors_per_traj2], bins=10,range=(0,np.max(med_disp_emb)))
+    plt.bar((H[1][:-1]+H[1][1:])/2, H[0], width=0.45*(H[1][1]-H[1][0]), edgecolor="red")
+    plt.ylabel('Number of cells', fontsize=12)
+    plt.xlabel('Relative displacement respect to the closest cluster', fontsize=12)
+    plt.legend(['not changing behavior ('+str(n_cells_not_changing_behavior)+')','changing behavior ('+str(n_cells_changing_behavior)+')'])
+    plt.savefig(os.path.join(cfg.result_dir, folder,  'behavior_transitions_and_displacements.png'), dpi=300)
     plt.clf()
     
     sns.set(font_scale=1.0)
