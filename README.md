@@ -6,7 +6,7 @@ This repository contains the code and documentation to implement SSE-BD: A self-
 ```
 A self-supervised embedding of cell migration features for behavior discovery over cell populations,
 Miguel Molina-Moreno, Iván González-Díaz, Ralf Mikut, Fernando Díaz-de-María
-Computer Methods and Programs in Biomedicine, doi: XXX, 2024. 
+Computer Methods and Programs in Biomedicine, 255:108337, doi: 10.1016/j.cmpb.2024.108337, 2024. 
 ```
 
 This code is partly based on the Pytorch implementation of the BELoss from the paper Training deep retrieval models with noisy datasets: Bag exponential loss [https://github.com/tmcortes/BELoss](https://github.com/tmcortes/BELoss).
@@ -22,10 +22,11 @@ If you find SSE-BD useful in your research, please consider citing:
 	@ARTICLE{ssebd,
 		title = {A self-supervised embedding of cell migration features for behavior discovery over cell populations},
 		journal = {Computer Methods and Programs in Biomedicine},
-		volume = {},
-		pages = {},
+		volume = {255},
+		pages = {108337},
 		year = {2024},
-		doi = {XXX},
+		doi = {https://doi.org/10.1016/j.cmpb.2024.108337},
+  		url = {https://www.sciencedirect.com/science/article/pii/S0169260724003304},
 		author = {Miguel Molina-Moreno and Iván González-Díaz and Ralf Mikut and Fernando Díaz-de-María}
 	}
   
